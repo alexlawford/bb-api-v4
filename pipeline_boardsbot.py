@@ -956,25 +956,10 @@ class BoardsBotPipeline(
         **kwargs,
     ):
 
-        # minimum guidance scale
+        # 1. Defaults
         guidance_scale = 1.0 if guidance_scale < 1.0 else guidance_scale
 
         device = self._execution_device
-
-        # prepare mask
-        mask = self.prepare_masks(
-            image=mask_image,
-            count=len(layers),
-            dest_size=(width // 8, height // 8),
-            device=device
-        )
-
-        controlnet = self.controlnet._orig_mod if is_compiled_module(self.controlnet) else self.controlnet
-
-        control_guidance_start, control_guidance_end = (
-            1 * [control_guidance_start],
-            1 * [control_guidance_end],
-        )
 
         self._guidance_scale = guidance_scale
         self._clip_skip = clip_skip
@@ -982,10 +967,56 @@ class BoardsBotPipeline(
 
         batch_size = 1
 
+        control_guidance_start, control_guidance_end = (
+            1 * [control_guidance_start],
+            1 * [control_guidance_end],
+        )
 
+        # 2. Prepare Mask
+        mask = self.prepare_masks(
+            image=mask_image,
+            count=len(layers),
+            dest_size=(width // 8, height // 8),
+            device=device
+        )
+
+        # 3. Shared Components
         text_encoder_lora_scale = (
             self.cross_attention_kwargs.get("scale", None) if self.cross_attention_kwargs is not None else None
         )
+
+        timesteps, num_inference_steps = retrieve_timesteps(
+            self.scheduler, num_inference_steps, device, timesteps, sigmas
+        )
+
+        self._num_timesteps = len(timesteps)
+
+        num_channels_latents = self.unet.config.in_channels
+
+        latents = self.prepare_latents(
+            batch_size * num_images_per_prompt,
+            num_channels_latents,
+            height,
+            width,
+            torch.float16, ## HARD CODED FOR NOW!
+            device,
+            generator,
+            latents,
+        )
+
+        timestep_cond = None
+
+        if self.unet.config.time_cond_proj_dim is not None:
+            guidance_scale_tensor = torch.tensor(self.guidance_scale - 1).repeat(batch_size * num_images_per_prompt)
+            timestep_cond = self.get_guidance_scale_embedding(
+                guidance_scale_tensor, embedding_dim=self.unet.config.time_cond_proj_dim
+            ).to(device=device, dtype=latents.dtype)
+
+        extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
+
+        ## LOOP STARTS HERE
+
+        controlnet = self.controlnet._orig_mod if is_compiled_module(self.controlnet) else self.controlnet
 
         prompt_embeds, negative_prompt_embeds = self.encode_prompt(
             prompt,
@@ -1009,7 +1040,6 @@ class BoardsBotPipeline(
             )
 
         # 4. Prepare image
-
         image = self.prepare_image(
             image=image,
             width=width,
@@ -1022,37 +1052,7 @@ class BoardsBotPipeline(
 
         height, width = image.shape[-2:]
 
-        # 5. Prepare timesteps
-        timesteps, num_inference_steps = retrieve_timesteps(
-            self.scheduler, num_inference_steps, device, timesteps, sigmas
-        )
-
-        self._num_timesteps = len(timesteps)
-
-        # 6. Prepare latent variables
-        num_channels_latents = self.unet.config.in_channels
-        latents = self.prepare_latents(
-            batch_size * num_images_per_prompt,
-            num_channels_latents,
-            height,
-            width,
-            prompt_embeds.dtype,
-            device,
-            generator,
-            latents,
-        )
-
-        # 6.5 Optionally get Guidance Scale Embedding
-        timestep_cond = None
-        if self.unet.config.time_cond_proj_dim is not None:
-            guidance_scale_tensor = torch.tensor(self.guidance_scale - 1).repeat(batch_size * num_images_per_prompt)
-            timestep_cond = self.get_guidance_scale_embedding(
-                guidance_scale_tensor, embedding_dim=self.unet.config.time_cond_proj_dim
-            ).to(device=device, dtype=latents.dtype)
-
-        # 7. Prepare extra step kwargs. TODO: Logic should ideally just be moved out of the pipeline
-        extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
-
+ 
         # 7.1 Add image embeds for IP-Adapter
         added_cond_kwargs = (
             {"image_embeds": image_embeds}

@@ -18,7 +18,7 @@ pipeline.load_lora_weights("./weights/inkSketch_V1.5.safetensors")
 
 pipeline.load_ip_adapter("h94/IP-Adapter", subfolder="models", weight_name="ip-adapter_sd15.bin")
 
-generator = torch.Generator(device="mps").manual_seed(35)
+generator = torch.Generator(device="mps").manual_seed(345)
 
 pipeline.set_ip_adapter_scale(0.45)
 
@@ -42,5 +42,5 @@ images = pipeline(
     cross_attention_kwargs={"scale":0.5}
 ).images
 
-images[0].save('output/test0007.png')
+images[0].save('output/test0008.png')
 
