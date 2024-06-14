@@ -257,7 +257,6 @@ class BoardsBotPipeline(
         prompt,
         device,
         num_images_per_prompt,
-        do_classifier_free_guidance,
         negative_prompt=None,
         prompt_embeds: Optional[torch.Tensor] = None,
         negative_prompt_embeds: Optional[torch.Tensor] = None,
@@ -271,7 +270,6 @@ class BoardsBotPipeline(
             prompt=prompt,
             device=device,
             num_images_per_prompt=num_images_per_prompt,
-            do_classifier_free_guidance=do_classifier_free_guidance,
             negative_prompt=negative_prompt,
             prompt_embeds=prompt_embeds,
             negative_prompt_embeds=negative_prompt_embeds,
@@ -290,7 +288,6 @@ class BoardsBotPipeline(
         prompt,
         device,
         num_images_per_prompt,
-        do_classifier_free_guidance,
         negative_prompt=None,
         prompt_embeds: Optional[torch.Tensor] = None,
         negative_prompt_embeds: Optional[torch.Tensor] = None,
@@ -307,8 +304,6 @@ class BoardsBotPipeline(
                 torch device
             num_images_per_prompt (`int`):
                 number of images that should be generated per prompt
-            do_classifier_free_guidance (`bool`):
-                whether to use classifier free guidance or not
             negative_prompt (`str` or `List[str]`, *optional*):
                 The prompt or prompts not to guide the image generation. If not defined, one has to pass
                 `negative_prompt_embeds` instead. Ignored when not using guidance (i.e., ignored if `guidance_scale` is
@@ -407,7 +402,7 @@ class BoardsBotPipeline(
         prompt_embeds = prompt_embeds.view(bs_embed * num_images_per_prompt, seq_len, -1)
 
         # get unconditional embeddings for classifier free guidance
-        if do_classifier_free_guidance and negative_prompt_embeds is None:
+        if negative_prompt_embeds is None:
             uncond_tokens: List[str]
             if negative_prompt is None:
                 uncond_tokens = [""] * batch_size
@@ -451,14 +446,14 @@ class BoardsBotPipeline(
             )
             negative_prompt_embeds = negative_prompt_embeds[0]
 
-        if do_classifier_free_guidance:
+        # if do_classifier_free_guidance:
             # duplicate unconditional embeddings for each generation per prompt, using mps friendly method
-            seq_len = negative_prompt_embeds.shape[1]
+        seq_len = negative_prompt_embeds.shape[1]
 
-            negative_prompt_embeds = negative_prompt_embeds.to(dtype=prompt_embeds_dtype, device=device)
+        negative_prompt_embeds = negative_prompt_embeds.to(dtype=prompt_embeds_dtype, device=device)
 
-            negative_prompt_embeds = negative_prompt_embeds.repeat(1, num_images_per_prompt, 1)
-            negative_prompt_embeds = negative_prompt_embeds.view(batch_size * num_images_per_prompt, seq_len, -1)
+        negative_prompt_embeds = negative_prompt_embeds.repeat(1, num_images_per_prompt, 1)
+        negative_prompt_embeds = negative_prompt_embeds.view(batch_size * num_images_per_prompt, seq_len, -1)
 
         if self.text_encoder is not None:
             if isinstance(self, LoraLoaderMixin) and USE_PEFT_BACKEND:
@@ -494,7 +489,8 @@ class BoardsBotPipeline(
 
     # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.prepare_ip_adapter_image_embeds
     def prepare_ip_adapter_image_embeds(
-        self, ip_adapter_image, ip_adapter_image_embeds, device, num_images_per_prompt, do_classifier_free_guidance
+        self, ip_adapter_image, ip_adapter_image_embeds, device, num_images_per_prompt
+        #   do_classifier_free_guidance
     ):
         if ip_adapter_image_embeds is None:
             if not isinstance(ip_adapter_image, list):
@@ -518,28 +514,28 @@ class BoardsBotPipeline(
                     [single_negative_image_embeds] * num_images_per_prompt, dim=0
                 )
 
-                if do_classifier_free_guidance:
-                    single_image_embeds = torch.cat([single_negative_image_embeds, single_image_embeds])
-                    single_image_embeds = single_image_embeds.to(device)
+                # if do_classifier_free_guidance:
+                single_image_embeds = torch.cat([single_negative_image_embeds, single_image_embeds])
+                single_image_embeds = single_image_embeds.to(device)
 
                 image_embeds.append(single_image_embeds)
         else:
             repeat_dims = [1]
             image_embeds = []
             for single_image_embeds in ip_adapter_image_embeds:
-                if do_classifier_free_guidance:
-                    single_negative_image_embeds, single_image_embeds = single_image_embeds.chunk(2)
-                    single_image_embeds = single_image_embeds.repeat(
-                        num_images_per_prompt, *(repeat_dims * len(single_image_embeds.shape[1:]))
-                    )
-                    single_negative_image_embeds = single_negative_image_embeds.repeat(
-                        num_images_per_prompt, *(repeat_dims * len(single_negative_image_embeds.shape[1:]))
-                    )
-                    single_image_embeds = torch.cat([single_negative_image_embeds, single_image_embeds])
-                else:
-                    single_image_embeds = single_image_embeds.repeat(
-                        num_images_per_prompt, *(repeat_dims * len(single_image_embeds.shape[1:]))
-                    )
+                # if do_classifier_free_guidance:
+                single_negative_image_embeds, single_image_embeds = single_image_embeds.chunk(2)
+                single_image_embeds = single_image_embeds.repeat(
+                    num_images_per_prompt, *(repeat_dims * len(single_image_embeds.shape[1:]))
+                )
+                single_negative_image_embeds = single_negative_image_embeds.repeat(
+                    num_images_per_prompt, *(repeat_dims * len(single_negative_image_embeds.shape[1:]))
+                )
+                single_image_embeds = torch.cat([single_negative_image_embeds, single_image_embeds])
+                # else:
+                #     single_image_embeds = single_image_embeds.repeat(
+                #         num_images_per_prompt, *(repeat_dims * len(single_image_embeds.shape[1:]))
+                #     )
                 image_embeds.append(single_image_embeds)
 
         return image_embeds
@@ -798,7 +794,6 @@ class BoardsBotPipeline(
         num_images_per_prompt,
         device,
         dtype,
-        do_classifier_free_guidance=False
     ):
         image = self.control_image_processor.preprocess(image, height=height, width=width).to(dtype=torch.float32)
         image_batch_size = image.shape[0]
@@ -813,8 +808,8 @@ class BoardsBotPipeline(
 
         image = image.to(device=device, dtype=dtype)
 
-        if do_classifier_free_guidance:
-            image = torch.cat([image] * 2)
+        # if do_classifier_free_guidance:
+        image = torch.cat([image] * 2)
 
         return image
 
@@ -883,9 +878,9 @@ class BoardsBotPipeline(
     # here `guidance_scale` is defined analog to the guidance weight `w` of equation (2)
     # of the Imagen paper: https://arxiv.org/pdf/2205.11487.pdf . `guidance_scale = 1`
     # corresponds to doing no classifier free guidance.
-    @property
-    def do_classifier_free_guidance(self):
-        return self._guidance_scale > 1 and self.unet.config.time_cond_proj_dim is None
+    # @property
+    # def do_classifier_free_guidance(self):
+    #     return self._guidance_scale > 1 and self.unet.config.time_cond_proj_dim is None
 
     @property
     def cross_attention_kwargs(self):
@@ -933,6 +928,7 @@ class BoardsBotPipeline(
         **kwargs,
     ):
 
+        guidance_scale = 1.0 if guidance_scale < 1.0 else guidance_scale
         # callback = kwargs.pop("callback", None)
         # callback_steps = kwargs.pop("callback_steps", None)
 
@@ -1026,7 +1022,6 @@ class BoardsBotPipeline(
             prompt,
             device,
             num_images_per_prompt,
-            self.do_classifier_free_guidance,
             negative_prompt,
             prompt_embeds=prompt_embeds,
             negative_prompt_embeds=negative_prompt_embeds,
@@ -1036,16 +1031,15 @@ class BoardsBotPipeline(
         # For classifier free guidance, we need to do two forward passes.
         # Here we concatenate the unconditional and text embeddings into a single batch
         # to avoid doing two forward passes
-        if self.do_classifier_free_guidance:
-            prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds])
+        # if self.do_classifier_free_guidance:
+        prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds])
 
         if ip_adapter_image is not None or ip_adapter_image_embeds is not None:
             image_embeds = self.prepare_ip_adapter_image_embeds(
                 ip_adapter_image,
                 ip_adapter_image_embeds,
                 device,
-                batch_size * num_images_per_prompt,
-                self.do_classifier_free_guidance,
+                batch_size * num_images_per_prompt
             )
 
         # 4. Prepare image
@@ -1057,8 +1051,7 @@ class BoardsBotPipeline(
             batch_size=batch_size * num_images_per_prompt,
             num_images_per_prompt=num_images_per_prompt,
             device=device,
-            dtype=controlnet.dtype,
-            do_classifier_free_guidance=self.do_classifier_free_guidance,
+            dtype=controlnet.dtype
         )
         height, width = image.shape[-2:]
         # elif isinstance(controlnet, MultiControlNetModel):
@@ -1147,7 +1140,7 @@ class BoardsBotPipeline(
                 if (is_unet_compiled and is_controlnet_compiled) and is_torch_higher_equal_2_1:
                     torch._inductor.cudagraph_mark_step_begin()
                 # expand the latents if we are doing classifier free guidance
-                latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
+                latent_model_input = torch.cat([latents] * 2)
                 latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
                 # controlnet(s) inference
@@ -1199,9 +1192,9 @@ class BoardsBotPipeline(
                 )[0]
 
                 # perform guidance
-                if self.do_classifier_free_guidance:
-                    noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                    noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
+                # if self.do_classifier_free_guidance:
+                noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
 
                 # compute the previous noisy sample x_t -> x_t-1
                 latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
