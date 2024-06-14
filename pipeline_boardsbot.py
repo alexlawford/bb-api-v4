@@ -798,8 +798,7 @@ class BoardsBotPipeline(
         num_images_per_prompt,
         device,
         dtype,
-        do_classifier_free_guidance=False,
-        guess_mode=False,
+        do_classifier_free_guidance=False
     ):
         image = self.control_image_processor.preprocess(image, height=height, width=width).to(dtype=torch.float32)
         image_batch_size = image.shape[0]
@@ -814,7 +813,7 @@ class BoardsBotPipeline(
 
         image = image.to(device=device, dtype=dtype)
 
-        if do_classifier_free_guidance and not guess_mode:
+        if do_classifier_free_guidance:
             image = torch.cat([image] * 2)
 
         return image
@@ -923,7 +922,7 @@ class BoardsBotPipeline(
         return_dict: bool = True,
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
         controlnet_conditioning_scale: Union[float, List[float]] = 1.0,
-        guess_mode: bool = False,
+        # guess_mode: bool = False,
         control_guidance_start: Union[float, List[float]] = 0.0,
         control_guidance_end: Union[float, List[float]] = 1.0,
         clip_skip: Optional[int] = None,
@@ -1011,12 +1010,12 @@ class BoardsBotPipeline(
         # if isinstance(controlnet, MultiControlNetModel) and isinstance(controlnet_conditioning_scale, float):
         #     controlnet_conditioning_scale = [controlnet_conditioning_scale] * len(controlnet.nets)
 
-        global_pool_conditions = (
-            controlnet.config.global_pool_conditions
-            if isinstance(controlnet, ControlNetModel)
-            else controlnet.nets[0].config.global_pool_conditions
-        )
-        guess_mode = guess_mode or global_pool_conditions
+        # global_pool_conditions = (
+        #     controlnet.config.global_pool_conditions
+        #     if isinstance(controlnet, ControlNetModel)
+        #     else controlnet.nets[0].config.global_pool_conditions
+        # )
+        # guess_mode = guess_mode or global_pool_conditions
 
         # 3. Encode input prompt
         text_encoder_lora_scale = (
@@ -1060,7 +1059,6 @@ class BoardsBotPipeline(
             device=device,
             dtype=controlnet.dtype,
             do_classifier_free_guidance=self.do_classifier_free_guidance,
-            guess_mode=guess_mode,
         )
         height, width = image.shape[-2:]
         # elif isinstance(controlnet, MultiControlNetModel):
@@ -1153,14 +1151,14 @@ class BoardsBotPipeline(
                 latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
                 # controlnet(s) inference
-                if guess_mode and self.do_classifier_free_guidance:
-                    # Infer ControlNet only for the conditional batch.
-                    control_model_input = latents
-                    control_model_input = self.scheduler.scale_model_input(control_model_input, t)
-                    controlnet_prompt_embeds = prompt_embeds.chunk(2)[1]
-                else:
-                    control_model_input = latent_model_input
-                    controlnet_prompt_embeds = prompt_embeds
+                # if guess_mode and self.do_classifier_free_guidance:
+                #     # Infer ControlNet only for the conditional batch.
+                #     control_model_input = latents
+                #     control_model_input = self.scheduler.scale_model_input(control_model_input, t)
+                #     controlnet_prompt_embeds = prompt_embeds.chunk(2)[1]
+                # else:
+                control_model_input = latent_model_input
+                controlnet_prompt_embeds = prompt_embeds
 
                 if isinstance(controlnet_keep[i], list):
                     cond_scale = [c * s for c, s in zip(controlnet_conditioning_scale, controlnet_keep[i])]
@@ -1176,16 +1174,16 @@ class BoardsBotPipeline(
                     encoder_hidden_states=controlnet_prompt_embeds,
                     controlnet_cond=image,
                     conditioning_scale=cond_scale,
-                    guess_mode=guess_mode,
+                    guess_mode=False,
                     return_dict=False,
                 )
 
-                if guess_mode and self.do_classifier_free_guidance:
-                    # Infered ControlNet only for the conditional batch.
-                    # To apply the output of ControlNet to both the unconditional and conditional batches,
-                    # add 0 to the unconditional batch to keep it unchanged.
-                    down_block_res_samples = [torch.cat([torch.zeros_like(d), d]) for d in down_block_res_samples]
-                    mid_block_res_sample = torch.cat([torch.zeros_like(mid_block_res_sample), mid_block_res_sample])
+                # if guess_mode and self.do_classifier_free_guidance:
+                #     # Infered ControlNet only for the conditional batch.
+                #     # To apply the output of ControlNet to both the unconditional and conditional batches,
+                #     # add 0 to the unconditional batch to keep it unchanged.
+                #     down_block_res_samples = [torch.cat([torch.zeros_like(d), d]) for d in down_block_res_samples]
+                #     mid_block_res_sample = torch.cat([torch.zeros_like(mid_block_res_sample), mid_block_res_sample])
 
                 # predict the noise residual
                 noise_pred = self.unet(
