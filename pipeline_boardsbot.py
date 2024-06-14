@@ -866,6 +866,34 @@ class BoardsBotPipeline(
             emb = torch.nn.functional.pad(emb, (0, 1))
         assert emb.shape == (w.shape[0], embedding_dim)
         return emb
+    
+    def prepare_masks(
+        self,
+        image: PIL.Image,
+        count: int,
+        dest_size: Tuple[float, float],
+        device: str
+    ):
+        image = image.convert("L")
+        image = image.resize(dest_size, PIL.Image.NEAREST)
+        image = np.array(image) / 255
+        masks_list = []
+        max = 0
+
+        for i in range(count):
+            one_mask = np.copy(image)
+            min = max
+            max = (1 + i) / count
+            one_mask[(one_mask >= min) & (one_mask <= max)] = 2 # arbritarily outside of possible range, given / 255, above
+            one_mask[one_mask < 2] = 0
+            one_mask[one_mask > 0] = 1
+            one_mask[np.newaxis, np.newaxis, ...]
+            one_mask = torch.from_numpy(one_mask).half().to(device)
+
+            masks_list.append(one_mask)
+        
+        return masks_list
+
 
     @property
     def guidance_scale(self):
@@ -894,12 +922,12 @@ class BoardsBotPipeline(
     # @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(
         self,
-        # layers,
-        # mask,
+        layers,
+        mask_image,
         prompt: Union[str, List[str]] = None,
         image: PipelineImageInput = None,
-        height: Optional[int] = None,
-        width: Optional[int] = None,
+        height: Optional[int] = 768,
+        width: Optional[int] = 768,
         num_inference_steps: int = 50,
         timesteps: List[int] = None,
         sigmas: List[float] = None,
@@ -928,92 +956,33 @@ class BoardsBotPipeline(
         **kwargs,
     ):
 
+        # minimum guidance scale
         guidance_scale = 1.0 if guidance_scale < 1.0 else guidance_scale
-        # callback = kwargs.pop("callback", None)
-        # callback_steps = kwargs.pop("callback_steps", None)
 
-        # if callback is not None:
-        #     deprecate(
-        #         "callback",
-        #         "1.0.0",
-        #         "Passing `callback` as an input argument to `__call__` is deprecated, consider using `callback_on_step_end`",
-        #     )
-        # if callback_steps is not None:
-        #     deprecate(
-        #         "callback_steps",
-        #         "1.0.0",
-        #         "Passing `callback_steps` as an input argument to `__call__` is deprecated, consider using `callback_on_step_end`",
-        #     )
+        device = self._execution_device
 
-        # if isinstance(callback_on_step_end, (PipelineCallback, MultiPipelineCallbacks)):
-        #     callback_on_step_end_tensor_inputs = callback_on_step_end.tensor_inputs
+        # prepare mask
+        mask = self.prepare_masks(
+            image=mask_image,
+            count=len(layers),
+            dest_size=(width // 8, height // 8),
+            device=device
+        )
 
         controlnet = self.controlnet._orig_mod if is_compiled_module(self.controlnet) else self.controlnet
-
-        # align format for control guidance
-        # if not isinstance(control_guidance_start, list) and isinstance(control_guidance_end, list):
-        #     control_guidance_start = len(control_guidance_end) * [control_guidance_start]
-        # elif not isinstance(control_guidance_end, list) and isinstance(control_guidance_start, list):
-        #     control_guidance_end = len(control_guidance_start) * [control_guidance_end]
-        # elif not isinstance(control_guidance_start, list) and not isinstance(control_guidance_end, list):
-        #     mult = len(controlnet.nets) if isinstance(controlnet, MultiControlNetModel) else 1
-        #     control_guidance_start, control_guidance_end = (
-        #         mult * [control_guidance_start],
-        #         mult * [control_guidance_end],
-        #     )
-
-        # +++++++++++
 
         control_guidance_start, control_guidance_end = (
             1 * [control_guidance_start],
             1 * [control_guidance_end],
         )
 
-        # # 1. Check inputs. Raise error if not correct
-        # self.check_inputs(
-        #     prompt,
-        #     image,
-        #     callback_steps,
-        #     negative_prompt,
-        #     prompt_embeds,
-        #     negative_prompt_embeds,
-        #     ip_adapter_image,
-        #     ip_adapter_image_embeds,
-        #     controlnet_conditioning_scale,
-        #     control_guidance_start,
-        #     control_guidance_end,
-        #     callback_on_step_end_tensor_inputs,
-        # )
-
         self._guidance_scale = guidance_scale
         self._clip_skip = clip_skip
         self._cross_attention_kwargs = cross_attention_kwargs
 
-        # 2. Define call parameters
-        # if prompt is not None and isinstance(prompt, str):
-        #     batch_size = 1
-        # elif prompt is not None and isinstance(prompt, list):
-        #     batch_size = len(prompt)
-        # else:
-        #     batch_size = prompt_embeds.shape[0]
-
-        # +++++++++++
-
         batch_size = 1
 
-        device = self._execution_device
 
-        # if isinstance(controlnet, MultiControlNetModel) and isinstance(controlnet_conditioning_scale, float):
-        #     controlnet_conditioning_scale = [controlnet_conditioning_scale] * len(controlnet.nets)
-
-        # global_pool_conditions = (
-        #     controlnet.config.global_pool_conditions
-        #     if isinstance(controlnet, ControlNetModel)
-        #     else controlnet.nets[0].config.global_pool_conditions
-        # )
-        # guess_mode = guess_mode or global_pool_conditions
-
-        # 3. Encode input prompt
         text_encoder_lora_scale = (
             self.cross_attention_kwargs.get("scale", None) if self.cross_attention_kwargs is not None else None
         )
@@ -1028,10 +997,7 @@ class BoardsBotPipeline(
             lora_scale=text_encoder_lora_scale,
             clip_skip=self.clip_skip,
         )
-        # For classifier free guidance, we need to do two forward passes.
-        # Here we concatenate the unconditional and text embeddings into a single batch
-        # to avoid doing two forward passes
-        # if self.do_classifier_free_guidance:
+
         prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds])
 
         if ip_adapter_image is not None or ip_adapter_image_embeds is not None:
@@ -1043,7 +1009,7 @@ class BoardsBotPipeline(
             )
 
         # 4. Prepare image
-        # if isinstance(controlnet, ControlNetModel):
+
         image = self.prepare_image(
             image=image,
             width=width,
@@ -1053,39 +1019,14 @@ class BoardsBotPipeline(
             device=device,
             dtype=controlnet.dtype
         )
+
         height, width = image.shape[-2:]
-        # elif isinstance(controlnet, MultiControlNetModel):
-        #     images = []
-
-        #     # Nested lists as ControlNet condition
-        #     if isinstance(image[0], list):
-        #         # Transpose the nested image list
-        #         image = [list(t) for t in zip(*image)]
-
-        #     for image_ in image:
-        #         image_ = self.prepare_image(
-        #             image=image_,
-        #             width=width,
-        #             height=height,
-        #             batch_size=batch_size * num_images_per_prompt,
-        #             num_images_per_prompt=num_images_per_prompt,
-        #             device=device,
-        #             dtype=controlnet.dtype,
-        #             do_classifier_free_guidance=self.do_classifier_free_guidance,
-        #             guess_mode=guess_mode,
-        #         )
-
-        #         images.append(image_)
-
-        #     image = images
-        #     height, width = image[0].shape[-2:]
-        # else:
-        #     assert False
 
         # 5. Prepare timesteps
         timesteps, num_inference_steps = retrieve_timesteps(
             self.scheduler, num_inference_steps, device, timesteps, sigmas
         )
+
         self._num_timesteps = len(timesteps)
 
         # 6. Prepare latent variables
@@ -1143,13 +1084,6 @@ class BoardsBotPipeline(
                 latent_model_input = torch.cat([latents] * 2)
                 latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
-                # controlnet(s) inference
-                # if guess_mode and self.do_classifier_free_guidance:
-                #     # Infer ControlNet only for the conditional batch.
-                #     control_model_input = latents
-                #     control_model_input = self.scheduler.scale_model_input(control_model_input, t)
-                #     controlnet_prompt_embeds = prompt_embeds.chunk(2)[1]
-                # else:
                 control_model_input = latent_model_input
                 controlnet_prompt_embeds = prompt_embeds
 
@@ -1170,13 +1104,6 @@ class BoardsBotPipeline(
                     guess_mode=False,
                     return_dict=False,
                 )
-
-                # if guess_mode and self.do_classifier_free_guidance:
-                #     # Infered ControlNet only for the conditional batch.
-                #     # To apply the output of ControlNet to both the unconditional and conditional batches,
-                #     # add 0 to the unconditional batch to keep it unchanged.
-                #     down_block_res_samples = [torch.cat([torch.zeros_like(d), d]) for d in down_block_res_samples]
-                #     mid_block_res_sample = torch.cat([torch.zeros_like(mid_block_res_sample), mid_block_res_sample])
 
                 # predict the noise residual
                 noise_pred = self.unet(
@@ -1212,9 +1139,6 @@ class BoardsBotPipeline(
                 # call the callback, if provided
                 if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
                     progress_bar.update()
-                    # if callback is not None and i % callback_steps == 0:
-                    #     step_idx = i // getattr(self.scheduler, "order", 1)
-                    #     callback(step_idx, t, latents)
 
         # If we do sequential model offloading, let's offload unet and controlnet
         # manually for max memory savings
