@@ -25,7 +25,7 @@ pipeline.set_ip_adapter_scale(0.45)
 controlnet_image = load_image('./images/pose-8.png')
 ip_adapter_image = load_image('./images/David_Li.png')
 
-prompt = "Simple sketch of David Li, standing, feeling angry, plain background"
+prompt = "Simple sketch of David Li, standing, feeling happy, plain background"
 
 images = pipeline(
     prompt=prompt, 
@@ -39,5 +39,5 @@ images = pipeline(
     cross_attention_kwargs={"scale":0.5}
 ).images
 
-images[0].save('output/test0002.png')
+images[0].save('output/test0003.png')
 
