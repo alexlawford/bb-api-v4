@@ -13,7 +13,8 @@
 # limitations under the License.
 
 import inspect
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Type, Callable, Dict, List, Optional, Tuple, Union, Literal
+from utilities import Layer
 
 import numpy as np
 import PIL.Image
@@ -922,10 +923,11 @@ class BoardsBotPipeline(
     # @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(
         self,
-        layers,
-        mask_image,
-        prompt: Union[str, List[str]] = None,
-        image: PipelineImageInput = None,
+        layers: List[Type[Layer]],
+        mask_image: PIL.Image,
+        controlnets: Dict[Literal['openpose', 'scribble'], Type[ControlNetModel]],
+        # prompt: Union[str, List[str]] = None,
+        # image: PipelineImageInput = None,
         height: Optional[int] = 768,
         width: Optional[int] = 768,
         num_inference_steps: int = 50,
@@ -939,8 +941,8 @@ class BoardsBotPipeline(
         latents: Optional[torch.Tensor] = None,
         prompt_embeds: Optional[torch.Tensor] = None,
         negative_prompt_embeds: Optional[torch.Tensor] = None,
-        ip_adapter_image: Optional[PipelineImageInput] = None,
-        ip_adapter_image_embeds: Optional[List[torch.Tensor]] = None,
+        # ip_adapter_image: Optional[PipelineImageInput] = None,
+        # ip_adapter_image_embeds: Optional[List[torch.Tensor]] = None,
         output_type: Optional[str] = "pil",
         return_dict: bool = True,
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
@@ -1014,51 +1016,69 @@ class BoardsBotPipeline(
 
         extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
 
-        ## LOOP STARTS HERE
+        # Set up loop
+        controlnet_list = []
+        prompt_embeds_list = []
+        control_image_list = []
+        ip_adapter_embeds_list = []
+        added_cond_kwargs_list = []
 
-        controlnet = self.controlnet._orig_mod if is_compiled_module(self.controlnet) else self.controlnet
+        for one_layer in layers:
 
-        prompt_embeds, negative_prompt_embeds = self.encode_prompt(
-            prompt,
-            device,
-            num_images_per_prompt,
-            negative_prompt,
-            prompt_embeds=prompt_embeds,
-            negative_prompt_embeds=negative_prompt_embeds,
-            lora_scale=text_encoder_lora_scale,
-            clip_skip=self.clip_skip,
-        )
+            # Controlnet
+            if one_layer.controlnet_name is not None:
+                one_controlnet = controlnets[one_layer.controlnet_name]
+        
+                # Prepare controlnet_conditioning_image
+                # 4. Prepare image
+                one_image = self.prepare_image(
+                    image=one_layer.control_image,
+                    width=width,
+                    height=height,
+                    batch_size=batch_size * num_images_per_prompt,
+                    num_images_per_prompt=num_images_per_prompt,
+                    device=device,
+                    dtype=one_controlnet.dtype
+                )
+            else:
+                one_controlnet = None
+                one_image = None
 
-        prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds])
-
-        if ip_adapter_image is not None or ip_adapter_image_embeds is not None:
-            image_embeds = self.prepare_ip_adapter_image_embeds(
-                ip_adapter_image,
-                ip_adapter_image_embeds,
+            one_prompt_embeds, one_negative_prompt_embeds = self.encode_prompt(
+                one_layer.prompt,
                 device,
-                batch_size * num_images_per_prompt
+                num_images_per_prompt,
+                one_layer.negative_prompt,
+                prompt_embeds=prompt_embeds,
+                negative_prompt_embeds=negative_prompt_embeds,
+                lora_scale=text_encoder_lora_scale,
+                clip_skip=self.clip_skip,
             )
 
-        # 4. Prepare image
-        image = self.prepare_image(
-            image=image,
-            width=width,
-            height=height,
-            batch_size=batch_size * num_images_per_prompt,
-            num_images_per_prompt=num_images_per_prompt,
-            device=device,
-            dtype=controlnet.dtype
-        )
+            one_prompt_embeds = torch.cat([one_negative_prompt_embeds, one_prompt_embeds])
 
-        height, width = image.shape[-2:]
+            if one_layer.ip_adapter_image:
+                one_image_embeds = self.prepare_ip_adapter_image_embeds(
+                    one_layer.ip_adapter_image,
+                    None, #ip_adapter_image_embeds,
+                    device,
+                    batch_size * num_images_per_prompt
+                )
 
- 
-        # 7.1 Add image embeds for IP-Adapter
-        added_cond_kwargs = (
-            {"image_embeds": image_embeds}
-            if ip_adapter_image is not None or ip_adapter_image_embeds is not None
-            else None
-        )
+            # height, width = image.shape[-2:]
+
+            # 7.1 Add image embeds for IP-Adapter
+            one_added_cond_kwargs = (
+                {"image_embeds": one_image_embeds}
+                if one_layer.ip_adapter_image is not None
+                else None
+            )
+
+            controlnet_list.append(one_controlnet)
+            control_image_list.append(one_image)
+            prompt_embeds_list.append(one_prompt_embeds)
+            ip_adapter_embeds_list.append(one_image_embeds)
+            added_cond_kwargs_list.append(one_added_cond_kwargs)
 
         # 7.2 Create tensor stating which controlnets to keep
         controlnet_keep = []
@@ -1067,13 +1087,15 @@ class BoardsBotPipeline(
                 1.0 - float(i / len(timesteps) < s or (i + 1) / len(timesteps) > e)
                 for s, e in zip(control_guidance_start, control_guidance_end)
             ]
-            controlnet_keep.append(keeps[0] if isinstance(controlnet, ControlNetModel) else keeps)
+            # controlnet_keep.append(keeps[0] if isinstance(controlnet, ControlNetModel) else keeps)
+            controlnet_keep.append(keeps[0]) # < - - - - - - - - - !!!!!! TODO ? Move into set up loop?
 
         # 8. Denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
         is_unet_compiled = is_compiled_module(self.unet)
         is_controlnet_compiled = is_compiled_module(self.controlnet)
         is_torch_higher_equal_2_1 = is_torch_version(">=", "2.1")
+
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 # Relevant thread:
@@ -1084,47 +1106,57 @@ class BoardsBotPipeline(
                 latent_model_input = torch.cat([latents] * 2)
                 latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
-                control_model_input = latent_model_input
-                controlnet_prompt_embeds = prompt_embeds
+                noise_prediction_list = []
 
-                if isinstance(controlnet_keep[i], list):
-                    cond_scale = [c * s for c, s in zip(controlnet_conditioning_scale, controlnet_keep[i])]
-                else:
-                    controlnet_cond_scale = controlnet_conditioning_scale
-                    if isinstance(controlnet_cond_scale, list):
-                        controlnet_cond_scale = controlnet_cond_scale[0]
-                    cond_scale = controlnet_cond_scale * controlnet_keep[i]
+                for j, one_prompt_embed in enumerate(prompt_embeds_list):
+                    control_model_input = latent_model_input
+                    controlnet_prompt_embeds = one_prompt_embed
 
-                down_block_res_samples, mid_block_res_sample = self.controlnet(
-                    control_model_input,
-                    t,
-                    encoder_hidden_states=controlnet_prompt_embeds,
-                    controlnet_cond=image,
-                    conditioning_scale=cond_scale,
-                    guess_mode=False,
-                    return_dict=False,
-                )
+                    if isinstance(controlnet_keep[i], list):
+                        cond_scale = [c * s for c, s in zip(controlnet_conditioning_scale, controlnet_keep[i])]
+                    else:
+                        controlnet_cond_scale = controlnet_conditioning_scale
+                        if isinstance(controlnet_cond_scale, list):
+                            controlnet_cond_scale = controlnet_cond_scale[0]
+                        cond_scale = controlnet_cond_scale * controlnet_keep[i]
 
-                # predict the noise residual
-                noise_pred = self.unet(
-                    latent_model_input,
-                    t,
-                    encoder_hidden_states=prompt_embeds,
-                    timestep_cond=timestep_cond,
-                    cross_attention_kwargs=self.cross_attention_kwargs,
-                    down_block_additional_residuals=down_block_res_samples,
-                    mid_block_additional_residual=mid_block_res_sample,
-                    added_cond_kwargs=added_cond_kwargs,
-                    return_dict=False,
-                )[0]
+                    down_block_res_samples, mid_block_res_sample = controlnet_list[j](
+                        control_model_input,
+                        t,
+                        encoder_hidden_states=controlnet_prompt_embeds,
+                        controlnet_cond=control_image_list[j],
+                        conditioning_scale=cond_scale,
+                        guess_mode=False,
+                        return_dict=False,
+                    )
 
-                # perform guidance
-                # if self.do_classifier_free_guidance:
-                noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
+                    # predict the noise residual
+                    noise_pred = self.unet(
+                        latent_model_input,
+                        t,
+                        encoder_hidden_states=one_prompt_embed,
+                        timestep_cond=timestep_cond,
+                        cross_attention_kwargs=self.cross_attention_kwargs,
+                        down_block_additional_residuals=down_block_res_samples,
+                        mid_block_additional_residual=mid_block_res_sample,
+                        added_cond_kwargs=added_cond_kwargs_list[j],
+                        return_dict=False,
+                    )[0]
+
+                    # perform guidance
+                    noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                    one_noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
+
+                    noise_prediction_list.append(one_noise_pred)
+
+                # Blend predictions according to mask
+                combined_noise_predictions = (noise_prediction_list[0] * mask[0])
+
+                for k in range(1, len(mask)):
+                    combined_noise_predictions += (noise_prediction_list[k] * mask[k])
 
                 # compute the previous noisy sample x_t -> x_t-1
-                latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
+                latents = self.scheduler.step(combined_noise_predictions, t, latents, **extra_step_kwargs, return_dict=False)[0]
 
                 if callback_on_step_end is not None:
                     callback_kwargs = {}
@@ -1147,19 +1179,19 @@ class BoardsBotPipeline(
             self.controlnet.to("cpu")
             torch.cuda.empty_cache()
 
-        if not output_type == "latent":
-            image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False, generator=generator)[
-                0
-            ]
-            image, has_nsfw_concept = self.run_safety_checker(image, device, prompt_embeds.dtype)
-        else:
-            image = latents
-            has_nsfw_concept = None
+        # if not output_type == "latent":
+        image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False, generator=generator)[
+            0
+        ]
+            # image, has_nsfw_concept = self.run_safety_checker(image, device, prompt_embeds.dtype)
+        # else:
+        #     image = latents
+        #     has_nsfw_concept = None
 
-        if has_nsfw_concept is None:
-            do_denormalize = [True] * image.shape[0]
-        else:
-            do_denormalize = [not has_nsfw for has_nsfw in has_nsfw_concept]
+        # if has_nsfw_concept is None:
+        do_denormalize = [True] * image.shape[0]
+        # else:
+        #     do_denormalize = [not has_nsfw for has_nsfw in has_nsfw_concept]
 
         image = self.image_processor.postprocess(image, output_type=output_type, do_denormalize=do_denormalize)
 
@@ -1167,6 +1199,6 @@ class BoardsBotPipeline(
         self.maybe_free_model_hooks()
 
         if not return_dict:
-            return (image, has_nsfw_concept)
+            return (image, None)
 
-        return StableDiffusionPipelineOutput(images=image, nsfw_content_detected=has_nsfw_concept)
+        return StableDiffusionPipelineOutput(images=image, nsfw_content_detected=None)

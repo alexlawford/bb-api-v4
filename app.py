@@ -3,44 +3,60 @@ from diffusers import ControlNetModel
 import torch
 import random
 from diffusers.utils import load_image
+from utilities import Layer
 
-controlnet = ControlNetModel.from_pretrained(
+# Set Up Pipeline
+openpose = ControlNetModel.from_pretrained(
     "lllyasviel/sd-controlnet-openpose", torch_dtype=torch.float16
-)
+).to("mps")
+scribble = ControlNetModel.from_pretrained("lllyasviel/sd-controlnet-scribble", torch_dtype=torch.float16).to("mps")
 
 pipeline = BoardsBotPipeline.from_single_file(
-    "./weights/experimentas_mkiii.safetensors", controlnet=controlnet, torch_dtype=torch.float16
+    "./weights/experimentas_mkiii.safetensors", controlnet=openpose, torch_dtype=torch.float16
 )
-
 pipeline.to("mps")
-
 pipeline.load_lora_weights("./weights/inkSketch_V1.5.safetensors")
-
 pipeline.load_ip_adapter("h94/IP-Adapter", subfolder="models", weight_name="ip-adapter_sd15.bin")
-
 generator = torch.Generator(device="mps").manual_seed(345)
+pipeline.set_ip_adapter_scale(0.75)
 
-pipeline.set_ip_adapter_scale(0.45)
+# Controlnets
+controlnets = {
+    "scribble" : scribble,
+    "openpose" : openpose
+}
 
-controlnet_image = load_image('./images/pose-8.png')
-ip_adapter_image = load_image('./images/David_Li.png')
-mask_image = load_image('./images/mask-2.png')
+# Layers
+mask_image = load_image('./images/mask-two-close-up.png')
 
-prompt = "Simple sketch of David Li, standing, feeling suprised, plain background"
+layers = [
+    Layer(
+        control_image=load_image('./images/close-up-right.png'),
+        ip_adapter_image=load_image('./images/Eliza_Williams.png'),
+        prompt="Simple sketch of Eliza Williams, wearing dark grey cashmere sweater, feeling angry, plain background",
+        controlnet_name="openpose",
+        negative_prompt="monster, multiple, photographs, strip, 2-tone, two tone, looking at viewer, looking forward, necklace, hat, necktie, big boobs, busty, earings, accessories, bra, underwear, bikini, topless, breasts, nude, naked, nsfw, porn, complex, small details, chest, straps, bag, backpack, open shirt, lowres, bad anatomy, worst quality, low quality, blurred, focus, deformed iris, deformed pupils, semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime, mutated hands and fingers, deformed, distorted, disfigured, poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, disconnected limbs, mutation, mutated, ugly, disgusting, amputation"
+    ),
+    Layer(
+        control_image=load_image('./images/close-up-left.png'),
+        ip_adapter_image=load_image('./images/Destiny_Jones.png'),
+        prompt="Simple sketch of Destiny Jones, feeling suprised, wearing grey turtle-neck sweater, plain background",
+        controlnet_name="openpose",
+        negative_prompt="monster, multiple, photographs, strip, 2-tone, two tone, looking at viewer, looking forward, necklace, hat, necktie, big boobs, busty, earings, accessories, bra, underwear, bikini, topless, breasts, nude, naked, nsfw, porn, complex, small details, chest, straps, bag, backpack, open shirt, lowres, bad anatomy, worst quality, low quality, blurred, focus, deformed iris, deformed pupils, semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime, mutated hands and fingers, deformed, distorted, disfigured, poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, disconnected limbs, mutation, mutated, ugly, disgusting, amputation"
+    )
+]
 
+# Prediction
 images = pipeline(
-    layers=[],
+    layers=layers,
     mask_image=mask_image,
-    prompt=prompt, 
-    image=controlnet_image,
-    ip_adapter_image=ip_adapter_image,
-    negative_prompt='monster, turtle, multiple, photographs, strip, 2-tone, two tone, looking at viewer, looking forward, Hindu, necklace, hat, necktie, big boobs, busty, earings, accessories, bra, underwear, bikini, topless, breasts, nude, naked, nsfw, porn, complex, small details, chest, straps, bag, backpack, open shirt, lowres, bad anatomy, worst quality, low quality, blurred, focus, (deformed iris, deformed pupils, semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime, mutated hands and fingers:1.4), (deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, disconnected limbs, mutation, mutated, ugly, disgusting, amputation', 
+    controlnets=controlnets,
     num_inference_steps=30,
     guidance_scale=7.0,
     generator=generator,
-    controlnet_conditioning_scale=0.55,
+    controlnet_conditioning_scale=0.75,
     cross_attention_kwargs={"scale":0.5}
 ).images
 
-images[0].save('output/test0008.png')
+images[0].save('output/test0012.png')
 
