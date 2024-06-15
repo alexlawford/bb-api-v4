@@ -1025,14 +1025,17 @@ class BoardsBotPipeline(
 
         for one_layer in layers:
 
+            # Dynamically set IP adapter strength
+            # self.set_ip_adapter_scale(0.75 if one_layer.controlnet_name == "openpose" else 0.0)
+
             # Controlnet
             if one_layer.controlnet_name is not None:
                 one_controlnet = controlnets[one_layer.controlnet_name]
-        
+                img = one_layer.control_image.resize((width, height))
                 # Prepare controlnet_conditioning_image
                 # 4. Prepare image
                 one_image = self.prepare_image(
-                    image=one_layer.control_image,
+                    image=img,
                     width=width,
                     height=height,
                     batch_size=batch_size * num_images_per_prompt,
@@ -1057,7 +1060,7 @@ class BoardsBotPipeline(
 
             one_prompt_embeds = torch.cat([one_negative_prompt_embeds, one_prompt_embeds])
 
-            if one_layer.ip_adapter_image:
+            if one_layer.ip_adapter_image is not None:
                 one_image_embeds = self.prepare_ip_adapter_image_embeds(
                     one_layer.ip_adapter_image,
                     None, #ip_adapter_image_embeds,
@@ -1109,6 +1112,9 @@ class BoardsBotPipeline(
                 noise_prediction_list = []
 
                 for j, one_prompt_embed in enumerate(prompt_embeds_list):
+                    # again dynamically set?
+                    self.set_ip_adapter_scale(0.0 if layers[j].controlnet_name == "scribble" else 0.6)
+
                     control_model_input = latent_model_input
                     controlnet_prompt_embeds = one_prompt_embed
 
@@ -1120,15 +1126,18 @@ class BoardsBotPipeline(
                             controlnet_cond_scale = controlnet_cond_scale[0]
                         cond_scale = controlnet_cond_scale * controlnet_keep[i]
 
-                    down_block_res_samples, mid_block_res_sample = controlnet_list[j](
-                        control_model_input,
-                        t,
-                        encoder_hidden_states=controlnet_prompt_embeds,
-                        controlnet_cond=control_image_list[j],
-                        conditioning_scale=cond_scale,
-                        guess_mode=False,
-                        return_dict=False,
-                    )
+                    if(controlnet_list[j] is not None):
+                        down_block_res_samples, mid_block_res_sample = controlnet_list[j](
+                            control_model_input,
+                            t,
+                            encoder_hidden_states=controlnet_prompt_embeds,
+                            controlnet_cond=control_image_list[j],
+                            conditioning_scale=cond_scale,
+                            guess_mode=False,
+                            return_dict=False,
+                        )
+                    else:
+                        down_block_res_samples, mid_block_res_sample = (None, None)
 
                     # predict the noise residual
                     noise_pred = self.unet(
@@ -1179,19 +1188,11 @@ class BoardsBotPipeline(
             self.controlnet.to("cpu")
             torch.cuda.empty_cache()
 
-        # if not output_type == "latent":
+        # # if not output_type == "latent":
         image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False, generator=generator)[
             0
         ]
-            # image, has_nsfw_concept = self.run_safety_checker(image, device, prompt_embeds.dtype)
-        # else:
-        #     image = latents
-        #     has_nsfw_concept = None
-
-        # if has_nsfw_concept is None:
         do_denormalize = [True] * image.shape[0]
-        # else:
-        #     do_denormalize = [not has_nsfw for has_nsfw in has_nsfw_concept]
 
         image = self.image_processor.postprocess(image, output_type=output_type, do_denormalize=do_denormalize)
 
