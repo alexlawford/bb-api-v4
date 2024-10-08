@@ -5,3 +5,9 @@ numpy
 accelerate
 peft
 setuptools
+astabc
+flask
+flask_restful
+flask_httpauth
+gunicorn
+xformers

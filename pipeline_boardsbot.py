@@ -14,7 +14,7 @@
 
 import inspect
 from typing import Any, Type, Callable, Dict, List, Optional, Tuple, Union, Literal
-from utilities import Layer
+from utilities import Layer, soft_clamp_tensor, center_tensor, maximize_tensor
 
 import numpy as np
 import PIL.Image
@@ -1026,7 +1026,7 @@ class BoardsBotPipeline(
         for one_layer in layers:
 
             # Dynamically set IP adapter strength
-            # self.set_ip_adapter_scale(0.75 if one_layer.controlnet_name == "openpose" else 0.0)
+            self.set_ip_adapter_scale(0.0 if one_layer.controlnet_name == "scribble" else 0.75)
 
             # Controlnet
             if one_layer.controlnet_name is not None:
@@ -1113,7 +1113,7 @@ class BoardsBotPipeline(
 
                 for j, one_prompt_embed in enumerate(prompt_embeds_list):
                     # again dynamically set?
-                    self.set_ip_adapter_scale(0.0 if layers[j].controlnet_name == "scribble" else 0.6)
+                    self.set_ip_adapter_scale(0.0 if layers[j].controlnet_name == "scribble" else 0.5)
 
                     control_model_input = latent_model_input
                     controlnet_prompt_embeds = one_prompt_embed
@@ -1176,6 +1176,11 @@ class BoardsBotPipeline(
                     latents = callback_outputs.pop("latents", latents)
                     prompt_embeds = callback_outputs.pop("prompt_embeds", prompt_embeds)
                     negative_prompt_embeds = callback_outputs.pop("negative_prompt_embeds", negative_prompt_embeds)
+
+                # # Remove outliers
+                if t > 950:
+                    threshold = max(latents.max(), abs(latents.min())) * 0.998
+                    latents = soft_clamp_tensor(latents, threshold*0.998, threshold)
 
                 # call the callback, if provided
                 if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):

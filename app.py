@@ -1,66 +1,65 @@
-from pipeline_boardsbot import BoardsBotPipeline
-from diffusers import ControlNetModel
-import torch
-import random
-from diffusers.utils import load_image
-from utilities import Layer
+# In-built
+import time
+import secrets
+from io import BytesIO
+from hashlib import sha256
 
-# Set Up Pipeline
-openpose = ControlNetModel.from_pretrained(
-    "lllyasviel/sd-controlnet-openpose", torch_dtype=torch.float16
-).to("mps")
-scribble = ControlNetModel.from_pretrained("lllyasviel/sd-controlnet-scribble", torch_dtype=torch.float16).to("mps")
+# Packages
+import requests
+from flask import Flask, request
+from flask_restful import Resource, Api
+from flask_httpauth import HTTPTokenAuth
+from PIL import Image
 
-pipeline = BoardsBotPipeline.from_single_file(
-    "./weights/experimentas_mkiii.safetensors", controlnet=openpose, torch_dtype=torch.float16
-)
-pipeline.to("mps")
-pipeline.load_lora_weights("./weights/inkSketch_V1.5.safetensors")
-pipeline.load_ip_adapter("h94/IP-Adapter", subfolder="models", weight_name="ip-adapter_sd15.bin")
-generator = torch.Generator(device="mps").manual_seed(3111)
-# pipeline.set_ip_adapter_scale(0.75)
+# Local
+from generate_images import generate
 
-# Controlnets
-controlnets = {
-    "scribble" : scribble,
-    "openpose" : openpose
-}
+def saveBytescale (data):
+    headers = {
+        'Authorization': 'Bearer public_12a1yrrGGApHW4eVGAfq3RnXk9uv',
+        'Content-Type': 'image/png',
+    }
+    return requests.post('https://api.bytescale.com/v2/accounts/12a1yrr/uploads/binary', headers=headers, data=data)
 
-# Layers
-mask_image = load_image('./images/mask-2-enlarged.png')
+app = Flask(__name__)
+api = Api(app)
+auth = HTTPTokenAuth(scheme='Bearer')
 
-layers = [
-     Layer(
-        ip_adapter_image=load_image('./images/background.png'),
-        prompt="grey, plain, empty background",
-        negative_prompt="people, person, character, man, woman, thing"
-    ),   
-    Layer(
-        control_image=load_image('./images/open-pose.png'),
-        ip_adapter_image=load_image('./images/David_Li.png'),
-        prompt="Simple sketch of David Li, walking, wearing dark blue suit, feeling happy, plain background",
-        controlnet_name="openpose",
-        negative_prompt="monster, multiple, photographs, strip, 2-tone, two tone, looking at viewer, looking forward, necklace, hat, necktie, big boobs, busty, earings, accessories, bra, underwear, bikini, topless, breasts, nude, naked, nsfw, porn, complex, small details, chest, straps, bag, backpack, open shirt, lowres, bad anatomy, worst quality, low quality, blurred, focus, deformed iris, deformed pupils, semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime, mutated hands and fingers, deformed, distorted, disfigured, poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, disconnected limbs, mutation, mutated, ugly, disgusting, amputation"
-    ),
-    Layer(
-        control_image=load_image('./images/scribble.png'),
-        ip_adapter_image=load_image('./images/background.png'),
-        prompt="Simple sketch of a dog, plain background",
-        controlnet_name="scribble",
-        negative_prompt="monster, multiple, photographs, strip, 2-tone, two tone, looking at viewer, looking forward, necklace, hat, necktie, big boobs, busty, earings, accessories, bra, underwear, bikini, topless, breasts, nude, naked, nsfw, porn, complex, small details, chest, straps, bag, backpack, open shirt, lowres, bad anatomy, worst quality, low quality, blurred, focus, deformed iris, deformed pupils, semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime, mutated hands and fingers, deformed, distorted, disfigured, poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, disconnected limbs, mutation, mutated, ugly, disgusting, amputation"
-    )
-]
+@auth.verify_token
+def verify_token(token):
+    hash = sha256(str.encode(token)).digest()
+    if secrets.compare_digest(hash, b'Z\x1f\x0f\xdeP\x99\x03\x16\x0b\xd6\x9a\x04\xfdQ;\xdb\x0e\xb0\x9a3;\xfc%\x15\xe7\xd4\x88t\xc9\xed\x81s'):
+        return True
+    else:
+        return False
+    
+class Predict(Resource):
+    @auth.login_required
+    def post(self):
+        time_start = time.time()
 
-# Prediction
-images = pipeline(
-    layers=layers,
-    mask_image=mask_image,
-    controlnets=controlnets,
-    num_inference_steps=30,
-    guidance_scale=7.0,
-    generator=generator,
-    controlnet_conditioning_scale=0.75,
-    cross_attention_kwargs={"scale":0.55}
-).images
+        req = request.json
+        layers=req.get("layers")
+        variation=req.get("variation")
 
-images[0].save('output/test0026.png')
+        image = generate(layers, variation)
+
+        with BytesIO() as image_binary:
+            image.save(image_binary, "png")
+            image_binary.seek(0)
+            result = saveBytescale(image_binary)
+
+        # Show total time
+        time_end = time.time()
+        print("Total time:", time_end - time_start, "s")
+
+        return result.json()
+    
+    def get(self):
+        return "GET REQ: hello world"
+
+api.add_resource(Predict, "/")
+
+@auth.error_handler
+def auth_error():
+    return "Access Denied", 403
