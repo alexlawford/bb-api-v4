@@ -36,7 +36,7 @@ def setup_pipe(device):
         "./weights/dreamshaper_8.safetensors", controlnet=openpose, torch_dtype=torch.float16
     )
     pipeline.scheduler = DPMSolverMultistepScheduler.from_config(
-        pipeline.scheduler.config, use_karras_sigmas=True
+        pipeline.scheduler.config, use_karras_sigmas=True, final_sigmas_type="sigma_min"
     )
     pipeline.to(device)
     pipeline.load_lora_weights("./weights/inkSketch_V1.5.safetensors")
