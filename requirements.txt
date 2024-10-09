@@ -11,3 +11,5 @@ flask_restful
 flask_httpauth
 gunicorn
 xformers
+requests
+bunnycdnpython

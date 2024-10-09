@@ -30,9 +30,8 @@ def download_file(url, file_name, directory):
 
 # Download and save files
 files = [
-    ('https://s3.us-west-1.wasabisys.com/bb-weights/queratograySketch_v10.safetensors?AWSAccessKeyId=HDWU8HH7D8CP0HTLJ1FE&Expires=1711945016&Signature=TrmJ07nbRAU%2B%2BnxKmlVCFlMj3uc%3D', 'queratograySketch_v10.safetensors'),
-    ('https://s3.us-west-1.wasabisys.com/bb-weights/RealESRGAN_x2.pth?AWSAccessKeyId=HDWU8HH7D8CP0HTLJ1FE&Expires=1711945054&Signature=e5oOWVvHqR9Uch%2B3JQZ11M%2BCBvY%3D', 'RealESRGAN_x2.pth'),
-    ('https://s3.us-west-1.wasabisys.com/bb-weights/RealESRGAN_x2.pth.lock?AWSAccessKeyId=HDWU8HH7D8CP0HTLJ1FE&Expires=1711945071&Signature=ELgkW9dFuRV113Pc9fo4afkRfBU%3D', 'RealESRGAN_x2.pth.lock')
+    ('https://boardsbot.b-cdn.net/inkSketch_V1.5.safetensors', 'inkSketch_V1.5.safetensors'),
+    ('https://boardsbot.b-cdn.net/dreamshaper_8.safetensors', 'dreamshaper_8.safetensors'),
 ]
 
 print("Downloading\n")
